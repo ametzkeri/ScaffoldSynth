@@ -188,7 +188,14 @@ class Track {
     this.postCrystal = context.createGain();
 
     this.reverbSend = context.createGain();
-    this.panNode = context.createStereoPanner();
+    if (typeof context.createStereoPanner === "function") {
+      this.panNode = context.createStereoPanner();
+      this.panParam = this.panNode.pan;
+    } else {
+      // Fallback for browsers without StereoPannerNode support.
+      this.panNode = context.createGain();
+      this.panParam = null;
+    }
     this.trackGain = context.createGain();
 
     this.analyser = context.createAnalyser();
@@ -274,7 +281,9 @@ class Track {
 
     const finalVolume = enabled ? volume : 0;
     this.trackGain.gain.setTargetAtTime(finalVolume, now, 0.015);
-    this.panNode.pan.setTargetAtTime(pan, now, 0.015);
+    if (this.panParam) {
+      this.panParam.setTargetAtTime(pan, now, 0.015);
+    }
 
     if (distortion <= 0.001) {
       this.distortion.curve = null;
@@ -602,6 +611,7 @@ class AudioEngine {
 
     this.activeTrackIndex = 0;
     this.liveTrackIndex = null;
+    this.pendingLiveNote = null;
     this.tracks = [];
 
     this.pendingTrackParams = Array.from({ length: NUM_TRACKS }, () => ({ ...DEFAULT_TRACK_PARAMS }));
@@ -705,12 +715,14 @@ class AudioEngine {
 
   ensureRunning() {
     if (!this.initialized) {
-      return;
+      return Promise.resolve();
     }
 
     if (this.context.state === "suspended") {
-      this.context.resume().then(() => this.unlockContextForMobile());
+      return this.context.resume().then(() => this.unlockContextForMobile());
     }
+
+    return Promise.resolve();
   }
 
   setActiveTrack(index) {
@@ -751,23 +763,51 @@ class AudioEngine {
       return;
     }
 
-    this.ensureRunning();
+    const trackIndex = this.activeTrackIndex;
+    const triggerNoteOn = (freq) => {
+      const track = this.tracks[trackIndex];
+      track.noteOn(freq, this.context.currentTime);
+      this.liveTrackIndex = trackIndex;
 
-    const track = this.tracks[this.activeTrackIndex];
-    track.noteOn(frequency, this.context.currentTime);
-    this.liveTrackIndex = this.activeTrackIndex;
+      if (track.recordArmed) {
+        const now = this.context.currentTime;
+        track.recordingNote = {
+          startTime: now,
+          startPos: this.getRecordPosition(track, now),
+          freq,
+        };
+      }
+    };
 
-    if (track.recordArmed) {
-      const now = this.context.currentTime;
-      track.recordingNote = {
-        startTime: now,
-        startPos: this.getRecordPosition(track, now),
-        freq: frequency,
+    if (this.context.state !== "running") {
+      const pending = {
+        trackIndex,
+        frequency,
+        cancelled: false,
       };
+      this.pendingLiveNote = pending;
+
+      this.ensureRunning().then(() => {
+        if (this.pendingLiveNote !== pending || pending.cancelled) {
+          return;
+        }
+
+        this.pendingLiveNote = null;
+        triggerNoteOn(pending.frequency);
+      });
+
+      return;
     }
+
+    triggerNoteOn(frequency);
   }
 
   moveLiveNote(frequency) {
+    if (this.pendingLiveNote) {
+      this.pendingLiveNote.frequency = frequency;
+      return;
+    }
+
     if (!this.initialized || this.liveTrackIndex === null) {
       return;
     }
@@ -781,6 +821,12 @@ class AudioEngine {
   }
 
   endLiveNote() {
+    if (this.pendingLiveNote) {
+      this.pendingLiveNote.cancelled = true;
+      this.pendingLiveNote = null;
+      return;
+    }
+
     if (!this.initialized || this.liveTrackIndex === null) {
       return;
     }
@@ -1291,7 +1337,7 @@ class ScaffoldController {
     const dom = this.renderer.domElement;
 
     dom.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) {
+      if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
 
@@ -1306,7 +1352,14 @@ class ScaffoldController {
 
       this.isPointerDown = true;
       this.activePointerId = event.pointerId;
-      dom.setPointerCapture(event.pointerId);
+      if (typeof dom.setPointerCapture === "function") {
+        try {
+          dom.setPointerCapture(event.pointerId);
+        } catch (error) {
+          // Some mobile browsers can throw here if pointer capture is not available.
+          console.warn("Pointer capture unavailable:", error);
+        }
+      }
       this.visualEnergy = 1;
 
       this.updateVisuals(sample);

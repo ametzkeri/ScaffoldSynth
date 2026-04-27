@@ -644,7 +644,10 @@ class AudioEngine {
     this.masterAnalyser.fftSize = 2048;
     this.masterAnalyser.smoothingTimeConstant = 0.85;
 
-    this.streamDestination = this.context.createMediaStreamDestination();
+    this.streamDestination =
+      typeof this.context.createMediaStreamDestination === "function"
+        ? this.context.createMediaStreamDestination()
+        : null;
 
     const masterCompressor = this.context.createDynamicsCompressor();
     masterCompressor.threshold.value = -14;
@@ -654,7 +657,9 @@ class AudioEngine {
     masterCompressor.connect(this.masterGain);
     this.masterGain.connect(this.masterAnalyser);
     this.masterAnalyser.connect(this.context.destination);
-    this.masterAnalyser.connect(this.streamDestination);
+    if (this.streamDestination) {
+      this.masterAnalyser.connect(this.streamDestination);
+    }
 
     this.masterGain.gain.value = this.pendingMasterVolume;
 
@@ -680,10 +685,9 @@ class AudioEngine {
       this.tracks.push(track);
     }
 
-    this.recorder = new Recorder(this.context, this.streamDestination.stream);
+    this.recorder = this.streamDestination ? new Recorder(this.context, this.streamDestination.stream) : null;
 
-    await this.context.resume();
-    this.unlockContextForMobile();
+    await this.ensureRunning();
     this.initialized = true;
   }
 
@@ -694,16 +698,16 @@ class AudioEngine {
     }
 
     try {
-      const buffer = this.context.createBuffer(1, 1, this.context.sampleRate);
-      const source = this.context.createBufferSource();
+      const source = this.context.createOscillator();
       const gain = this.context.createGain();
-      gain.gain.value = 0;
-
-      source.buffer = buffer;
+      gain.gain.value = 0.00001;
+      source.type = "sine";
+      source.frequency.value = 40;
       source.connect(gain);
       gain.connect(this.context.destination);
-      source.start();
-      source.stop(this.context.currentTime + 0.01);
+      const now = this.context.currentTime;
+      source.start(now);
+      source.stop(now + 0.03);
       source.onended = () => {
         source.disconnect();
         gain.disconnect();
@@ -714,11 +718,11 @@ class AudioEngine {
   }
 
   ensureRunning() {
-    if (!this.initialized) {
+    if (!this.context) {
       return Promise.resolve();
     }
 
-    if (this.context.state === "suspended") {
+    if (this.context.state !== "running") {
       return this.context.resume().then(() => this.unlockContextForMobile());
     }
 
@@ -789,6 +793,10 @@ class AudioEngine {
 
       this.ensureRunning().then(() => {
         if (this.pendingLiveNote !== pending || pending.cancelled) {
+          return;
+        }
+
+        if (this.context.state !== "running") {
           return;
         }
 
@@ -1226,6 +1234,7 @@ class ScaffoldController {
 
     this.isPointerDown = false;
     this.activePointerId = null;
+    this.activeTouchId = null;
 
     this.handleResize = this.handleResize.bind(this);
     this.animate = this.animate.bind(this);
@@ -1335,8 +1344,25 @@ class ScaffoldController {
 
   bindPointerEvents() {
     const dom = this.renderer.domElement;
+    this.activeTouchId = null;
+
+    const releaseInteraction = () => {
+      if (!this.isPointerDown) {
+        return;
+      }
+
+      this.isPointerDown = false;
+      this.activePointerId = null;
+      this.activeTouchId = null;
+      this.callbacks.onNoteEnd();
+    };
 
     dom.addEventListener("pointerdown", (event) => {
+      // Touch is handled through dedicated touch events for better iOS reliability.
+      if (event.pointerType === "touch") {
+        return;
+      }
+
       if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
@@ -1352,22 +1378,27 @@ class ScaffoldController {
 
       this.isPointerDown = true;
       this.activePointerId = event.pointerId;
+      this.activeTouchId = null;
+
       if (typeof dom.setPointerCapture === "function") {
         try {
           dom.setPointerCapture(event.pointerId);
         } catch (error) {
-          // Some mobile browsers can throw here if pointer capture is not available.
           console.warn("Pointer capture unavailable:", error);
         }
       }
-      this.visualEnergy = 1;
 
+      this.visualEnergy = 1;
       this.updateVisuals(sample);
       this.callbacks.onPreview(sample);
       this.callbacks.onNoteStart(sample);
     });
 
     dom.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch") {
+        return;
+      }
+
       if (event.cancelable) {
         event.preventDefault();
       }
@@ -1390,7 +1421,11 @@ class ScaffoldController {
       }
     });
 
-    const release = (event) => {
+    const releasePointer = (event) => {
+      if (event.pointerType === "touch") {
+        return;
+      }
+
       if (!this.isPointerDown) {
         return;
       }
@@ -1403,85 +1438,110 @@ class ScaffoldController {
         event.preventDefault();
       }
 
-      this.isPointerDown = false;
-      this.activePointerId = null;
-      this.callbacks.onNoteEnd();
+      releaseInteraction();
     };
 
-    dom.addEventListener("pointerup", release);
-    dom.addEventListener("pointercancel", release);
-    dom.addEventListener("lostpointercapture", release);
-    window.addEventListener("pointerup", release);
-    window.addEventListener("pointercancel", release);
+    dom.addEventListener("pointerup", releasePointer);
+    dom.addEventListener("pointercancel", releasePointer);
+    dom.addEventListener("lostpointercapture", releasePointer);
+    window.addEventListener("pointerup", releasePointer);
+    window.addEventListener("pointercancel", releasePointer);
 
-    if (typeof window.PointerEvent === "undefined") {
-      dom.addEventListener(
-        "touchstart",
-        (event) => {
-          if (event.cancelable) {
-            event.preventDefault();
-          }
+    const findTouchById = (touchList, touchId) => {
+      for (let i = 0; i < touchList.length; i += 1) {
+        const touch = touchList[i];
+        if (touch.identifier === touchId) {
+          return touch;
+        }
+      }
+      return null;
+    };
 
-          const touch = event.touches[0];
-          if (!touch) {
-            return;
-          }
+    dom.addEventListener(
+      "touchstart",
+      (event) => {
+        if (event.cancelable) {
+          event.preventDefault();
+        }
 
-          const sample = this.sampleFromClient(touch.clientX, touch.clientY);
-          if (!sample) {
-            return;
-          }
+        if (this.isPointerDown) {
+          return;
+        }
 
-          this.isPointerDown = true;
-          this.visualEnergy = 1;
-          this.updateVisuals(sample);
-          this.callbacks.onPreview(sample);
-          this.callbacks.onNoteStart(sample);
-        },
-        { passive: false }
-      );
+        const touch = event.changedTouches[0];
+        if (!touch) {
+          return;
+        }
 
-      dom.addEventListener(
-        "touchmove",
-        (event) => {
-          if (event.cancelable) {
-            event.preventDefault();
-          }
+        const sample = this.sampleFromClient(touch.clientX, touch.clientY);
+        if (!sample) {
+          return;
+        }
 
-          const touch = event.touches[0];
-          if (!touch) {
-            return;
-          }
+        this.isPointerDown = true;
+        this.activeTouchId = touch.identifier;
+        this.activePointerId = null;
+        this.visualEnergy = 1;
+        this.updateVisuals(sample);
+        this.callbacks.onPreview(sample);
+        this.callbacks.onNoteStart(sample);
+      },
+      { passive: false }
+    );
 
-          const sample = this.sampleFromClient(touch.clientX, touch.clientY);
-          if (!sample) {
-            return;
-          }
+    dom.addEventListener(
+      "touchmove",
+      (event) => {
+        if (event.cancelable) {
+          event.preventDefault();
+        }
 
-          this.updateVisuals(sample);
-          this.callbacks.onPreview(sample);
+        if (!this.isPointerDown || this.activeTouchId === null) {
+          return;
+        }
 
-          if (this.isPointerDown) {
-            this.visualEnergy = 1;
-            this.callbacks.onNoteMove(sample);
-          }
-        },
-        { passive: false }
-      );
+        const touch =
+          findTouchById(event.touches, this.activeTouchId) ||
+          findTouchById(event.changedTouches, this.activeTouchId);
 
-      dom.addEventListener(
-        "touchend",
-        () => {
-          if (!this.isPointerDown) {
-            return;
-          }
+        if (!touch) {
+          return;
+        }
 
-          this.isPointerDown = false;
-          this.callbacks.onNoteEnd();
-        },
-        { passive: false }
-      );
-    }
+        const sample = this.sampleFromClient(touch.clientX, touch.clientY);
+        if (!sample) {
+          return;
+        }
+
+        this.updateVisuals(sample);
+        this.callbacks.onPreview(sample);
+        this.visualEnergy = 1;
+        this.callbacks.onNoteMove(sample);
+      },
+      { passive: false }
+    );
+
+    const releaseTouch = (event) => {
+      if (!this.isPointerDown || this.activeTouchId === null) {
+        return;
+      }
+
+      const ended = findTouchById(event.changedTouches, this.activeTouchId);
+      if (!ended) {
+        return;
+      }
+
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
+      releaseInteraction();
+    };
+
+    dom.addEventListener("touchend", releaseTouch, { passive: false });
+    dom.addEventListener("touchcancel", releaseTouch, { passive: false });
+    window.addEventListener("touchend", releaseTouch, { passive: false });
+    window.addEventListener("touchcancel", releaseTouch, { passive: false });
   }
 
   sampleFromEvent(event) {
@@ -2012,9 +2072,14 @@ class UIController {
         this.syncLoopUI();
       };
 
-      this.engine.recorder.onStateChange = (state) => {
-        this.applyMasterRecorderState(state);
-      };
+      if (this.engine.recorder) {
+        this.engine.recorder.onStateChange = (state) => {
+          this.applyMasterRecorderState(state);
+        };
+      } else {
+        this.elements.recordMasterBtn.disabled = true;
+        this.elements.recordMasterBtn.textContent = "Recorder unavailable";
+      }
 
       this.elements.initOverlay.classList.add("hidden");
       this.refreshEventCounters();

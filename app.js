@@ -673,7 +673,34 @@ class AudioEngine {
     this.recorder = new Recorder(this.context, this.streamDestination.stream);
 
     await this.context.resume();
+    this.unlockContextForMobile();
     this.initialized = true;
+  }
+
+  unlockContextForMobile() {
+    // iOS/Safari can keep contexts semi-suspended until the graph has emitted at least once.
+    if (!this.context) {
+      return;
+    }
+
+    try {
+      const buffer = this.context.createBuffer(1, 1, this.context.sampleRate);
+      const source = this.context.createBufferSource();
+      const gain = this.context.createGain();
+      gain.gain.value = 0;
+
+      source.buffer = buffer;
+      source.connect(gain);
+      gain.connect(this.context.destination);
+      source.start();
+      source.stop(this.context.currentTime + 0.01);
+      source.onended = () => {
+        source.disconnect();
+        gain.disconnect();
+      };
+    } catch (error) {
+      console.warn("Context mobile unlock failed:", error);
+    }
   }
 
   ensureRunning() {
@@ -682,7 +709,7 @@ class AudioEngine {
     }
 
     if (this.context.state === "suspended") {
-      this.context.resume();
+      this.context.resume().then(() => this.unlockContextForMobile());
     }
   }
 
@@ -1268,6 +1295,10 @@ class ScaffoldController {
         return;
       }
 
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
       const sample = this.sampleFromEvent(event);
       if (!sample) {
         return;
@@ -1284,6 +1315,10 @@ class ScaffoldController {
     });
 
     dom.addEventListener("pointermove", (event) => {
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
       if (this.isPointerDown && event.pointerId !== this.activePointerId) {
         return;
       }
@@ -1311,6 +1346,10 @@ class ScaffoldController {
         return;
       }
 
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
       this.isPointerDown = false;
       this.activePointerId = null;
       this.callbacks.onNoteEnd();
@@ -1321,16 +1360,89 @@ class ScaffoldController {
     dom.addEventListener("lostpointercapture", release);
     window.addEventListener("pointerup", release);
     window.addEventListener("pointercancel", release);
+
+    if (typeof window.PointerEvent === "undefined") {
+      dom.addEventListener(
+        "touchstart",
+        (event) => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+
+          const touch = event.touches[0];
+          if (!touch) {
+            return;
+          }
+
+          const sample = this.sampleFromClient(touch.clientX, touch.clientY);
+          if (!sample) {
+            return;
+          }
+
+          this.isPointerDown = true;
+          this.visualEnergy = 1;
+          this.updateVisuals(sample);
+          this.callbacks.onPreview(sample);
+          this.callbacks.onNoteStart(sample);
+        },
+        { passive: false }
+      );
+
+      dom.addEventListener(
+        "touchmove",
+        (event) => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+
+          const touch = event.touches[0];
+          if (!touch) {
+            return;
+          }
+
+          const sample = this.sampleFromClient(touch.clientX, touch.clientY);
+          if (!sample) {
+            return;
+          }
+
+          this.updateVisuals(sample);
+          this.callbacks.onPreview(sample);
+
+          if (this.isPointerDown) {
+            this.visualEnergy = 1;
+            this.callbacks.onNoteMove(sample);
+          }
+        },
+        { passive: false }
+      );
+
+      dom.addEventListener(
+        "touchend",
+        () => {
+          if (!this.isPointerDown) {
+            return;
+          }
+
+          this.isPointerDown = false;
+          this.callbacks.onNoteEnd();
+        },
+        { passive: false }
+      );
+    }
   }
 
   sampleFromEvent(event) {
+    return this.sampleFromClient(event.clientX, event.clientY);
+  }
+
+  sampleFromClient(clientX, clientY) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
       return null;
     }
 
-    const localX = event.clientX - rect.left;
-    const localY = event.clientY - rect.top;
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
 
     const normalizedX = clamp(localX / rect.width, 0, 1);
     const normalizedY = clamp(localY / rect.height, 0, 1);

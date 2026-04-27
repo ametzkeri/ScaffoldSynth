@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scaffold Synth</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header glass">
+        <div class="brand">
+          <h1>Scaffold Synth</h1>
+          <p>Spatial Web Synthesizer by Álvaro Metzker</p>
+        </div>
+        <div class="status-cluster">
+          <div class="status-pill">
+            <span>Track</span>
+            <strong id="active-track-label">1</strong>
+          </div>
+          <div class="status-pill">
+            <span>Note</span>
+            <strong id="current-note-label">--</strong>
+          </div>
+          <div class="status-pill">
+            <span>Freq</span>
+            <strong id="current-freq-label">0.00 Hz</strong>
+          </div>
+          <div class="status-pill record" id="record-state-pill">
+            <span>Master</span>
+            <strong id="master-record-label">Idle</strong>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="panel glass left-panel">
+          <div class="panel-title-row">
+            <h2>Tracks</h2>
+            <span class="small-muted">4 channels</span>
+          </div>
+          <div id="track-list" class="track-list"></div>
+        </aside>
+
+        <section class="center-stage glass">
+          <div class="stage-top">
+            <h2>3D Scaffold</h2>
+            <p>Press or slide to play</p>
+          </div>
+          <div id="scaffold-container"></div>
+          <div class="stage-hud">
+            <span id="hover-note">Note: --</span>
+            <span id="hover-freq">0.00 Hz</span>
+          </div>
+        </section>
+
+        <aside class="panel glass right-panel">
+          <div class="panel-title-row">
+            <h2>Synth & FX</h2>
+            <span class="small-muted">Active track</span>
+          </div>
+
+          <div class="controls-grid">
+            <label class="control select-control">
+              <span>Waveform</span>
+              <select id="waveform">
+                <option value="sine">sine</option>
+                <option value="square">square</option>
+                <option value="sawtooth" selected>sawtooth</option>
+                <option value="triangle">triangle</option>
+              </select>
+            </label>
+
+            <label class="control select-control">
+              <span>Filter Type</span>
+              <select id="filter-type">
+                <option value="lowpass" selected>lowpass</option>
+                <option value="highpass">highpass</option>
+              </select>
+            </label>
+
+            <label class="control toggle-control">
+              <span>Osc 2</span>
+              <button id="osc2-toggle" class="toggle-btn is-on" type="button" aria-pressed="true">On</button>
+            </label>
+
+            <div class="control">
+              <label for="track-volume">Track Volume <output id="track-volume-val"></output></label>
+              <input id="track-volume" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.75" />
+            </div>
+
+            <div class="control">
+              <label for="master-volume">Master Volume <output id="master-volume-val"></output></label>
+              <input id="master-volume" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.85" />
+            </div>
+
+            <div class="control">
+              <label for="pan">Pan <output id="pan-val"></output></label>
+              <input id="pan" data-format="pan" type="range" min="-1" max="1" step="0.01" value="0" />
+            </div>
+
+            <div class="control">
+              <label for="osc-mix">Oscillator Mix <output id="osc-mix-val"></output></label>
+              <input id="osc-mix" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.35" />
+            </div>
+
+            <div class="control">
+              <label for="detune">Detune (cents) <output id="detune-val"></output></label>
+              <input id="detune" data-format="cents" type="range" min="0" max="50" step="1" value="8" />
+            </div>
+
+            <div class="control">
+              <label for="attack">Attack (s) <output id="attack-val"></output></label>
+              <input id="attack" data-format="seconds" type="range" min="0.001" max="2" step="0.001" value="0.03" />
+            </div>
+
+            <div class="control">
+              <label for="decay">Decay (s) <output id="decay-val"></output></label>
+              <input id="decay" data-format="seconds" type="range" min="0.01" max="2" step="0.01" value="0.2" />
+            </div>
+
+            <div class="control">
+              <label for="sustain">Sustain <output id="sustain-val"></output></label>
+              <input id="sustain" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.72" />
+            </div>
+
+            <div class="control">
+              <label for="release">Release (s) <output id="release-val"></output></label>
+              <input id="release" data-format="seconds" type="range" min="0.01" max="3" step="0.01" value="0.4" />
+            </div>
+
+            <div class="control">
+              <label for="filter-cutoff">Filter Cutoff (Hz) <output id="filter-cutoff-val"></output></label>
+              <input id="filter-cutoff" data-format="hz" type="range" min="80" max="14000" step="1" value="8000" />
+            </div>
+
+            <div class="control">
+              <label for="filter-resonance">Filter Resonance <output id="filter-resonance-val"></output></label>
+              <input id="filter-resonance" data-format="q" type="range" min="0.1" max="20" step="0.1" value="1.2" />
+            </div>
+
+            <div class="control">
+              <label for="reverb">Reverb Amount <output id="reverb-val"></output></label>
+              <input id="reverb" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.18" />
+            </div>
+
+            <div class="control">
+              <label for="distortion">Distortion Amount <output id="distortion-val"></output></label>
+              <input id="distortion" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.08" />
+            </div>
+
+            <div class="control">
+              <label for="phaser">Phaser Amount <output id="phaser-val"></output></label>
+              <input id="phaser" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.18" />
+            </div>
+
+            <div class="control">
+              <label for="metallic">Metallic Amount <output id="metallic-val"></output></label>
+              <input id="metallic" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.12" />
+            </div>
+
+            <div class="control">
+              <label for="crystalizer">Crystalizer Amount <output id="crystalizer-val"></output></label>
+              <input id="crystalizer" data-format="percent" type="range" min="0" max="1" step="0.01" value="0.2" />
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <section class="transport glass">
+        <div class="transport-group">
+          <button id="record-track-btn" class="btn">Record Track</button>
+          <button id="play-loop-btn" class="btn">Play Loop</button>
+          <button id="clear-track-btn" class="btn subtle">Clear Track</button>
+          <button id="clear-all-btn" class="btn subtle">Clear All</button>
+        </div>
+
+        <div id="track-selector" class="track-selector" aria-label="Track selector"></div>
+
+        <div class="transport-group align-right">
+          <button id="record-master-btn" class="btn record-master">Record Master</button>
+        </div>
+      </section>
+
+      <section id="scope-panel" class="glass">
+        <div class="scope-head">
+          <div class="scope-head-text">
+            <h3>Scope</h3>
+            <small>Master + Tracks</small>
+          </div>
+          <button id="scope-toggle-btn" class="scope-toggle-btn" type="button" aria-expanded="true">
+            Hide
+          </button>
+        </div>
+        <canvas id="scope-canvas" width="360" height="220"></canvas>
+      </section>
+      <button id="scope-reopen-btn" class="scope-reopen-btn" type="button" aria-label="Mostrar Scope" hidden>
+        Scope
+      </button>
+
+      <div id="init-overlay">
+        <div class="init-card glass">
+          <h2>Click to initialize audio</h2>
+          <p>Web Audio API requires user interaction to start.</p>
+          <button id="init-audio-btn" class="btn init-btn">Initialize</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
